@@ -1,71 +1,192 @@
 import numpy as np
+import constants
+import time
+import perception
+from scipy.spatial import distance
 
-
-# This is where you can build a decision tree for determining throttle, brake and steer 
-# commands based on the output of the perception_step() function
 def decision_step(Rover):
-
-    # Implement conditionals to decide what to do given perception data
-    # Here you're all set up with some basic functionality but you'll need to
-    # improve on this decision tree to do a good job of navigating autonomously!
-
-    # Example:
-    # Check if we have vision data to make decisions with
-    if Rover.nav_angles is not None:
-        # Check for Rover.mode status
-        if Rover.mode == 'forward': 
-            # Check the extent of navigable terrain
-            if len(Rover.nav_angles) >= Rover.stop_forward:  
-                # If mode is forward, navigable terrain looks good 
-                # and velocity is below max, then throttle 
-                if Rover.vel < Rover.max_vel:
-                    # Set throttle value to throttle setting
-                    Rover.throttle = Rover.throttle_set
-                else: # Else coast
-                    Rover.throttle = 0
+    
+    if Rover.mode == 'start':
+        Rover.start_pos = Rover.pos
+        Rover.mode = 'initial_recon'
+        return Rover
+        
+    if Rover.mode == 'stop_before_end':
+        Rover.steer = 0
+        Rover.brake = Rover.brake_set
+        Rover.throttle = 0
+        if Rover.vel == 0:
+            Rover.mode = 'end'
+        return Rover
+        
+    if Rover.mode == 'end':
+        Rover.steer = np.clip(Rover.angle_to_start, -15, 15) # Steer towards starting position
+        if abs(Rover.steer) < 2 :
+            Rover.throttle = 0.2
+            Rover.brake = 0
+        else:
+            Rover.brake = Rover.brake_set
+        
+        if Rover.distance_from_start < 1: # 1 metre radius from starting position --> success!
+            Rover.brake = Rover.brake_set
+            Rover.throttle = 0
+            Rover.steer = 0
+            print('Completed the run')
+        else:
+            Rover.brake = 0
+        return Rover
+        
+    if Rover.mode == 'cruise' and Rover.distance_from_start <= constants.MAP_COMPLETION_DISTANCE_FROM_START and Rover.perc_mapped > constants.MAP_COMPLETION_OBJECTIVE_PERC:
+        Rover.brake = Rover.brake_set
+        Rover.mode = 'stop_before_end'
+        return Rover
+    
+    if Rover.mode not in ['pickup', 'rotate_before_pickup', 'wait_for_pickup_start', 'wait_for_pickup_end']:
+        if Rover.rock_size > 0 and Rover.rock_angle > constants.ROCK_PICKUP_ANGLE_THRESHOLD and Rover.rock_dist < constants.ROCK_PICKUP_DISTANCE_THRESHOLD:
+                if not Rover.send_pickup and not Rover.picking_up:
+                    Rover.mode = 'rotate_before_pickup'
+                    Rover.target_rock_pos = Rover.rock_pos
+                    return Rover
+                
+    if Rover.mode == 'wait_for_pickup_start':
+        if Rover.picking_up:
+            Rover.mode = 'wait_for_pickup_end'
+        return Rover
+        
+    if Rover.mode == 'pickup':
+        if Rover.picking_up:
+            Rover.mode = 'wait_for_pickup'
+            return Rover
+        distance_to_rock = distance.euclidean(Rover.pos, Rover.target_rock_pos)
+        if distance_to_rock < 2 and Rover.rock_size == 0:
+                Rover.mode = 'cruise'
+                Rover.target_rock_pos = None
+                return Rover
+        if Rover.near_sample == 1:
+            Rover.steer = 0
+            Rover.throttle = 0
+            Rover.brake = Rover.brake_set
+            if Rover.vel == 0:
+                if Rover.vel == 0 and not Rover.picking_up and not Rover.send_pickup:
+                    Rover.send_pickup = True
+                    Rover.mode = 'wait_for_pickup_start'
+                    return Rover
+        else:
+            if len(Rover.rock_angles) > 0:
+                Rover.steer = np.clip(Rover.rock_angle, -15, 15)
+            else:
+                Rover.steer = 0
+            if Rover.vel < 0.5:
+                Rover.throttle = 0.3
                 Rover.brake = 0
-                # Set steering to average angle clipped to the range +/- 15
-                Rover.steer = np.clip(np.mean(Rover.nav_angles * 180/np.pi), -15, 15)
-            # If there's a lack of navigable terrain pixels then go to 'stop' mode
-            elif len(Rover.nav_angles) < Rover.stop_forward:
-                    # Set mode to "stop" and hit the brakes!
-                    Rover.throttle = 0
-                    # Set brake to stored brake value
-                    Rover.brake = Rover.brake_set
-                    Rover.steer = 0
-                    Rover.mode = 'stop'
-
-        # If we're already in "stop" mode then make different decisions
-        elif Rover.mode == 'stop':
-            # If we're in stop mode but still moving keep braking
-            if Rover.vel > 0.2:
+            elif Rover.vel > 1:
                 Rover.throttle = 0
                 Rover.brake = Rover.brake_set
-                Rover.steer = 0
-            # If we're not moving (vel < 0.2) then do something else
-            elif Rover.vel <= 0.2:
-                # Now we're stopped and we have vision data to see if there's a path forward
-                if len(Rover.nav_angles) < Rover.go_forward:
-                    Rover.throttle = 0
-                    # Release the brake to allow turning
-                    Rover.brake = 0
-                    # Turn range is +/- 15 degrees, when stopped the next line will induce 4-wheel turning
-                    Rover.steer = -15 # Could be more clever here about which way to turn
-                # If we're stopped but see sufficient navigable terrain in front then go!
-                if len(Rover.nav_angles) >= Rover.go_forward:
-                    # Set throttle back to stored value
-                    Rover.throttle = Rover.throttle_set
-                    # Release the brake
-                    Rover.brake = 0
-                    # Set steer to mean angle
-                    Rover.steer = np.clip(np.mean(Rover.nav_angles * 180/np.pi), -15, 15)
-                    Rover.mode = 'forward'
-    # Just to make the rover do something 
-    # even if no modifications have been made to the code
-    else:
-        Rover.throttle = Rover.throttle_set
+            else:
+                Rover.throttle = 0.2
+                Rover.brake = 0
+        return Rover
+        
+    if Rover.mode == 'rotate_before_pickup':
+        Rover.throttle = 0
+        # Brake as soon as a rock is found
+        if Rover.vel > 0:
+            Rover.brake = Rover.brake_set
+            return Rover
+        else:
+            Rover.brake = 0
+            
+        diff_angle = perception.angle_difference(Rover.pos, Rover.target_rock_pos, Rover.yaw)
+        diff_angle_vision = Rover.rock_angle - Rover.yaw;
+        if abs(diff_angle) < 2 or diff_angle_vision < 2:
+            Rover.steer = 0
+            Rover.mode = 'pickup'
+        else:
+            Rover.steer = np.clip(diff_angle, -15, 15)
+        return Rover
+    
+    if Rover.mode == 'wait_for_pickup_end':
+        Rover.send_pickup = False
+        Rover.brake = Rover.brake_set
         Rover.steer = 0
+        Rover.throttle = 0
+        if not Rover.picking_up:
+            Rover.brake = 0
+            Rover.mode = 'cruise'
+            Rover.target_rock_pos = None
+        return Rover
+    
+    if Rover.mode == 'initial_recon':
+        Rover.steer = 15
+        Rover.throttle = 0
         Rover.brake = 0
-
+        if Rover.recon_distance > 159 and len(Rover.nav_angles) > constants.RECON_CLEARANCE_THRESHOLD:
+            Rover.brake = Rover.brake_set
+            Rover.steer = 0
+            Rover.mode = 'cruise'
+        
+    if Rover.mode == 'cruise':
+        Rover.brake = 0
+        Rover.steer = 0
+        if Rover.front_wall_distance >= constants.FRONT_WALL_STOP_DISTANCE:  
+            # If navigable terrain looks good 
+            # and velocity is below max, then throttle 
+            max_vel = Rover.max_vel
+            max_throttle = Rover.throttle_set
+            # Halve the max speed if there is a rock nearby
+            if Rover.rock_size > 0 :
+                max_vel = Rover.max_vel / 2
+            if Rover.front_wall_distance < 20:
+                max_vel = Rover.max_vel / 2
+                max_throttle = Rover.throttle_set / 2
+                
+            if Rover.vel < max_vel:
+                # Set throttle value to throttle setting
+                Rover.throttle = max_throttle
+            else: # Else coast
+                Rover.throttle = 0
+            Rover.brake = 0
+        elif Rover.front_wall_distance < constants.FRONT_WALL_STOP_DISTANCE:
+                # Set mode to "stop" and hit the brakes!
+                Rover.throttle = 0
+                # Set brake to stored brake value
+                Rover.brake = Rover.brake_set
+                Rover.steer = 0
+                if Rover.vel == 0:
+                    Rover.mode = 'reverse'
+                
+        if Rover.wall_distance < constants.SIDE_WALL_DISTANCE:
+            Rover.throttle = 0
+            Rover.steer = np.clip(Rover.steer-15, -15, 15) #Steer right
+        elif Rover.wall_distance < 55:
+            Rover.steer = np.clip(Rover.steer+10, -15, 15) #Steer left
+        else:
+            Rover.steer = 10
+            
+    if Rover.mode == 'reverse':
+        Rover.throttle = -1 * Rover.throttle_set
+        Rover.steer = 15
+        Rover.brake = 0
+        if Rover.front_wall_distance >= constants.REVERSE_MODE_CLEAR_DISTANCE:
+            Rover.steer = 0
+            Rover.brake = Rover.brake_set
+            Rover.throttle = 0
+            Rover.mode = 'stop_and_turn'
+            
+    if Rover.mode == 'stop_and_turn':
+        if Rover.vel != 0:
+            Rover.throttle = 0
+            Rover.brake = Rover.brake_set
+            Rover.steer = 0
+        else:
+            Rover.steer = -15
+            Rover.brake = 0
+            Rover.throttle = 0
+            
+        if Rover.front_wall_distance > constants.STOP_TURN_RECOVERY_CLEARANCE:
+            Rover.steer = 0
+            Rover.brake = Rover.brake_set
+            Rover.throttle = 0
+            Rover.mode = 'cruise'
+            
     return Rover
-

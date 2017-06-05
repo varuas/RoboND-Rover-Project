@@ -1,49 +1,61 @@
 import numpy as np
 import cv2
 from PIL import Image
-from io import BytesIO, StringIO
 import base64
 import time
+from io import BytesIO
+import constants
+
+# Define a function to convert telemetry strings to float independent of decimal convention
+def convert_to_float(string_to_convert):
+      if ',' in string_to_convert:
+            float_value = np.float(string_to_convert.replace(',','.'))
+      else: 
+            float_value = np.float(string_to_convert)
+      return float_value
 
 def update_rover(Rover, data):
       # Initialize start time and sample positions
       if Rover.start_time == None:
             Rover.start_time = time.time()
             Rover.total_time = 0
-            samples_xpos = np.int_([np.float(pos.strip()) for pos in data["samples_x"].split(',')])
-            samples_ypos = np.int_([np.float(pos.strip()) for pos in data["samples_y"].split(',')])
+            samples_xpos = np.int_([convert_to_float(pos.strip()) for pos in data["samples_x"].split(';')])
+            samples_ypos = np.int_([convert_to_float(pos.strip()) for pos in data["samples_y"].split(';')])
             Rover.samples_pos = (samples_xpos, samples_ypos)
-            Rover.samples_found = np.zeros((len(Rover.samples_pos[0]))).astype(np.int)
+            Rover.samples_to_find = np.int(data["sample_count"])
       # Or just update elapsed time
       else:
             tot_time = time.time() - Rover.start_time
             if np.isfinite(tot_time):
                   Rover.total_time = tot_time
       # Print out the fields in the telemetry data dictionary
-      print(data.keys())
+      #print(data.keys())
       # The current speed of the rover in m/s
-      Rover.vel = np.float(data["speed"])
+      Rover.vel = convert_to_float(data["speed"])
       # The current position of the rover
-      Rover.pos = np.fromstring(data["position"], dtype=float, sep=',')
+      Rover.pos = [convert_to_float(pos.strip()) for pos in data["position"].split(';')]
       # The current yaw angle of the rover
-      Rover.yaw = np.float(data["yaw"])
+      Rover.yaw = convert_to_float(data["yaw"])
       # The current yaw angle of the rover
-      Rover.pitch = np.float(data["pitch"])
+      Rover.pitch = convert_to_float(data["pitch"])
       # The current yaw angle of the rover
-      Rover.roll = np.float(data["roll"])
+      Rover.roll = convert_to_float(data["roll"])
       # The current throttle setting
-      Rover.throttle = np.float(data["throttle"])
+      Rover.throttle = convert_to_float(data["throttle"])
       # The current steering angle
-      Rover.steer = np.float(data["steering_angle"])
+      Rover.steer = convert_to_float(data["steering_angle"])
       # Near sample flag
       Rover.near_sample = np.int(data["near_sample"])
       # Picking up flag
       Rover.picking_up = np.int(data["picking_up"])
-      
-      print('speed =',Rover.vel, 'position =', Rover.pos, 'throttle =', 
-      Rover.throttle, 'steer_angle =', Rover.steer, 'near_sample', Rover.near_sample, 
-      'picking_up', data["picking_up"])
+      # Update number of rocks found
+      Rover.samples_found = Rover.samples_to_find - np.int(data["sample_count"])
 
+#      print('speed =',Rover.vel, 'position =', Rover.pos, 'throttle =', 
+#      Rover.throttle, 'steer_angle =', Rover.steer, 'near_sample:', Rover.near_sample, 
+#      'picking_up:', data["picking_up"], 'sending pickup:', Rover.send_pickup, 
+#      'total time:', Rover.total_time, 'samples remaining:', data["sample_count"], 
+#      'samples found:', Rover.samples_found)
       # Get the current image from the center camera of the rover
       imgString = data["image"]
       image = Image.open(BytesIO(base64.b64decode(imgString)))
@@ -69,6 +81,11 @@ def create_output_images(Rover):
 
       likely_nav = navigable >= obstacle
       obstacle[likely_nav] = 0
+      
+      # The probable obstacles are removed from navigable map
+      likely_obs = obstacle >= constants.OBSTACLE_PROBABILITY_FACTOR * navigable
+      navigable[likely_obs] = 0
+      
       plotmap = np.zeros_like(Rover.worldmap)
       plotmap[:, :, 0] = obstacle
       plotmap[:, :, 2] = navigable
@@ -82,7 +99,7 @@ def create_output_images(Rover):
       # to confirm whether detections are real
       if rock_world_pos[0].any():
             rock_size = 2
-            for idx in range(len(Rover.samples_pos[0]) - 1):
+            for idx in range(len(Rover.samples_pos[0])):
                   test_rock_x = Rover.samples_pos[0][idx]
                   test_rock_y = Rover.samples_pos[1][idx]
                   rock_sample_dists = np.sqrt((test_rock_x - rock_world_pos[1])**2 + \
@@ -91,7 +108,6 @@ def create_output_images(Rover):
                   # consider it a success and plot the location of the known
                   # sample on the map
                   if np.min(rock_sample_dists) < 3:
-                        Rover.samples_found[idx] = 1
                         map_add[test_rock_y-rock_size:test_rock_y+rock_size, 
                         test_rock_x-rock_size:test_rock_x+rock_size, :] = 255
 
@@ -100,12 +116,10 @@ def create_output_images(Rover):
       tot_nav_pix = np.float(len((plotmap[:,:,2].nonzero()[0])))
       # Next figure out how many of those correspond to ground truth pixels
       good_nav_pix = np.float(len(((plotmap[:,:,2] > 0) & (Rover.ground_truth[:,:,1] > 0)).nonzero()[0]))
-      # Next find how many do not correspond to ground truth pixels
-      bad_nav_pix = np.float(len(((plotmap[:,:,2] > 0) & (Rover.ground_truth[:,:,1] == 0)).nonzero()[0]))
       # Grab the total number of map pixels
       tot_map_pix = np.float(len((Rover.ground_truth[:,:,1].nonzero()[0])))
       # Calculate the percentage of ground truth map that has been successfully found
-      perc_mapped = round(100*good_nav_pix/tot_map_pix, 1)
+      Rover.perc_mapped = round(100*good_nav_pix/tot_map_pix, 1)
       # Calculate the number of good map pixel detections divided by total pixels 
       # found to be navigable terrain
       if tot_nav_pix > 0:
@@ -114,14 +128,34 @@ def create_output_images(Rover):
             fidelity = 0
       # Flip the map for plotting so that the y-axis points upward in the display
       map_add = np.flipud(map_add).astype(np.float32)
-      # Add some text about map and rock sample detection results
+          
+      radar_info = 'Radar:F=' + str(int(Rover.wall_distance)) +",S=" + str(int(Rover.front_wall_distance)) 
+      mode_info = 'Mode:' + Rover.mode
+      
+      rock_size = len(Rover.rock_dists)
+      rock_dist = 0
+      rock_angle = 0
+      if rock_size > 0:
+          rock_dist = np.mean(Rover.rock_dists)
+          rock_angle = np.mean(Rover.rock_angles) * 180/np.pi
+      rock_info = 'Rock:A=' + str(int(rock_angle)) + ',D=' +str(int(rock_dist))
+      
       cv2.putText(map_add,"Time: "+str(np.round(Rover.total_time, 1))+' s', (0, 10), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
-      cv2.putText(map_add,"Mapped: "+str(perc_mapped)+'%', (0, 25), 
+      cv2.putText(map_add,"Mapped: "+str(Rover.perc_mapped)+'%', (0, 25), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
       cv2.putText(map_add,"Fidelity: "+str(fidelity)+'%', (0, 40), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
-      cv2.putText(map_add,"Rocks Found: "+str(np.sum(Rover.samples_found)), (0, 55), 
+      cv2.putText(map_add,"Rocks Found: "+str(np.sum(Rover.samples_found)), (0, 70), 
+                  cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
+      cv2.putText(map_add,radar_info, (0, 85), 
+                  cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
+#      if Rover.target_rock_pos != None :
+#          cv2.putText(map_add,"%d,%d" % (Rover.target_rock_pos[0], Rover.target_rock_pos[1]), (0, 100), 
+#                  cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
+      cv2.putText(map_add,mode_info, (0, 180), 
+                  cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
+      cv2.putText(map_add,rock_info, (0, 195), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
 
       # Convert map and vision image to base64 strings for sending to server
@@ -136,6 +170,3 @@ def create_output_images(Rover):
       encoded_string2 = base64.b64encode(buff.getvalue()).decode("utf-8")
 
       return encoded_string1, encoded_string2
-
-
-
