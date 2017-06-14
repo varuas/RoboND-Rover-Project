@@ -79,7 +79,7 @@ def rock_thresh(img, rgb_thresh_min=(125,102,0), rgb_thresh_max=(204,185,78)):
     return output
 
 # Threshold the navigabble part of the image
-def navigable_thresh(img, clip_top_ratio = 0.45, rgb_thresh_min=(118, 93, 69), rgb_thresh_max=(255,255,255)):
+def navigable_thresh(img, clip_top_ratio = 0.45, rgb_thresh_min=(118, 93, 89), rgb_thresh_max=(255,255,255)):
     nav_th_img = color_thresh(img, rgb_thresh_min, rgb_thresh_max)
     top_half = int(clip_top_ratio * img.shape[0])
     nav_th_img[:top_half,:] = 0 # above the horizon its not navigable
@@ -160,11 +160,14 @@ def perception_step(Rover):
     obstacle_x_rover, obstacle_y_rover = rover_coords(obstacle_trans_image)
     obstacle_x_world, obstacle_y_world = pix_to_world(obstacle_x_rover, obstacle_y_rover, Rover.pos[0], Rover.pos[1], Rover.yaw, world_map_size, map_scale)
     
+    if not (Rover.pitch <= constants.PITCH_TOLERANCE or Rover.pitch >= (360 - constants.PITCH_TOLERANCE)):
+        # pitch out of range, don't update the Rover
+        return Rover
+    
     # 7) Update Rover worldmap (to be displayed on right side of screen)
-    if Rover.pitch <= constants.PITCH_TOLERANCE or Rover.pitch >= (360 - constants.PITCH_TOLERANCE):
-        Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
-        Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
-        Rover.worldmap[clipped_navigable_y_world, clipped_navigable_x_world, 2] += 1
+    Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
+    Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
+    Rover.worldmap[clipped_navigable_y_world, clipped_navigable_x_world, 2] += 1
     
     # Update Rover pixel distances and angles
     Rover.nav_dists, Rover.nav_angles = to_polar_coords(navigable_x_rover, navigable_y_rover)
@@ -180,6 +183,7 @@ def perception_step(Rover):
     Rover.distance_from_start = distance.euclidean(Rover.pos, Rover.start_pos)
     Rover.angle_to_start = angle_difference(Rover.pos, Rover.start_pos, Rover.yaw)
     
+    # Calculate the distance and angle of the rock detected
     Rover.rock_size = len(Rover.rock_dists)
     if Rover.rock_size > 0:
         Rover.rock_dist = np.mean(Rover.rock_dists)

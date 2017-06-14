@@ -4,6 +4,7 @@ from PIL import Image
 import base64
 import time
 from io import BytesIO
+import math
 import constants
 
 # Define a function to convert telemetry strings to float independent of decimal convention
@@ -132,13 +133,13 @@ def create_output_images(Rover):
       radar_info = 'Radar:F=' + str(int(Rover.wall_distance)) +",S=" + str(int(Rover.front_wall_distance)) 
       mode_info = 'Mode:' + Rover.mode
       
-      rock_size = len(Rover.rock_dists)
-      rock_dist = 0
       rock_angle = 0
-      if rock_size > 0:
-          rock_dist = np.mean(Rover.rock_dists)
-          rock_angle = np.mean(Rover.rock_angles) * 180/np.pi
-      rock_info = 'Rock:A=' + str(int(rock_angle)) + ',D=' +str(int(rock_dist))
+      rock_dist = 0
+      if not math.isnan(Rover.rock_angle):
+          rock_angle = int(Rover.rock_angle)
+      if not math.isnan(Rover.rock_dist):
+          rock_dist = int(Rover.rock_dist)
+      rock_info = 'Rock:A=' + str(rock_angle) + ',D=' +str(rock_dist)
       
       cv2.putText(map_add,"Time: "+str(np.round(Rover.total_time, 1))+' s', (0, 10), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
@@ -150,9 +151,6 @@ def create_output_images(Rover):
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
       cv2.putText(map_add,radar_info, (0, 85), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
-#      if Rover.target_rock_pos != None :
-#          cv2.putText(map_add,"%d,%d" % (Rover.target_rock_pos[0], Rover.target_rock_pos[1]), (0, 100), 
-#                  cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
       cv2.putText(map_add,mode_info, (0, 180), 
                   cv2.FONT_HERSHEY_COMPLEX, 0.4, (255, 255, 255), 1)
       cv2.putText(map_add,rock_info, (0, 195), 

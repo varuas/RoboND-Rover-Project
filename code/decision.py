@@ -1,6 +1,5 @@
 import numpy as np
 import constants
-import time
 import perception
 from scipy.spatial import distance
 
@@ -54,9 +53,6 @@ def decision_step(Rover):
         return Rover
         
     if Rover.mode == 'pickup':
-        if Rover.picking_up:
-            Rover.mode = 'wait_for_pickup'
-            return Rover
         distance_to_rock = distance.euclidean(Rover.pos, Rover.target_rock_pos)
         if distance_to_rock < 2 and Rover.rock_size == 0:
                 Rover.mode = 'cruise'
@@ -97,8 +93,7 @@ def decision_step(Rover):
             Rover.brake = 0
             
         diff_angle = perception.angle_difference(Rover.pos, Rover.target_rock_pos, Rover.yaw)
-        diff_angle_vision = Rover.rock_angle - Rover.yaw;
-        if abs(diff_angle) < 2 or diff_angle_vision < 2:
+        if abs(diff_angle) < 2:
             Rover.steer = 0
             Rover.mode = 'pickup'
         else:
